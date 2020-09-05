@@ -95,7 +95,32 @@ If you launch the container using host networking \(With the `--net=host` parame
 
 #### Bridge Networking
 
-It is possible to configure the `macvlan` driver to bridge your container to the host's networking adapter. Specific instructions for this container are not yet available but you can read a write-up for docker at [collabnix.com/docker-17-06-swarm-mode-now-with-macvlan-support](http://collabnix.com/docker-17-06-swarm-mode-now-with-macvlan-support/).
+It is possible to configure the `macvlan` driver to bridge your container to the host's networking adapter. The `macvlan` driver attaches the container with the unifi controller to the local network instead of exposing the controller to the network via ports on the docker host system. There are two (2) steps to follow when using a `macvlan`: (1) create the `macvlan` network in docker and (2) start the container with the unifi controller and attach the container to the `macvlan` network. An optional third step enables access to the container from the host machine. I highly recommend [https://blog.oddbit.com/post/2018-03-12-using-docker-macvlan-networks/](https://blog.oddbit.com/post/2018-03-12-using-docker-macvlan-networks/) by Lars Kellog-Stedman for additional background information and important caveats and cautions. Basic steps to define and implement a `macvlan` using docker commands are outlined below. `docker-compose` could also be used, and, `podman` also works well for users hosting the controller on systems with `podman` instead of docker although there are differences in how the `macvlan` is defined. `podman` specific instructions are out of scope at this time.
+
+
+The docker commands below assume the following scenario: (1) the unifi equipment are all on the `192.168.110.0/24` subnet with the controller at `192.168.110.1`; (2) the `macvlan` is defined to include all IPs from `192.168.110.224` to `192.168.110.254`, i.e. `192.168.110.224/27`; (3) the controller has an IP address of `192.168.110.226`; (4) the nethwork interface on the docker host is `eth0`.
+
+ 
+First, create a `docker macvlan` network called `unifinet` with the following docker command. The `aux-address` functions to reserve the specified IP from being used by docker in the `macvlan`. Run as root or with sudo.
+```bash
+docker network create -d macvlan -o parent=eth0  --subnet 192.168.110.0/24 --gateway 192.168.110.1 --ip-range 192.168.110.224/27 --aux-address 'host=192.168.110.225' unifinet
+```
+
+Second, start the docker container with the appropriate options. Specific to the `macvlan`, is the `--network` option which attaches the container to the `unifinet` network defined above, and the `--ip` options which assigns the `192.168.110.226` ip address to the container. The controller is run in the `user` home directory in the `./docker/unifi-data` subdirectory. `user` has a 1010 UID and 1010 GID. The `:Z` postfix on the `-v` volume options is needed only by systems with selinux active. Run as root or with sudo.
+```bash
+docker run --rm --init --network unifinet --ip 192.168.110.226 -e TZ=America/Pacific -e RUNAS_UID0=false -e UNIFI_UID=1010 -e UNIFI_GID=1010 -v /home/user/docker/unifi-data/unifi-vol:/unifi:Z -v /home/user/docker/unifi-data/run:/var/run/unifi:Z --name unifi jacobalberty/unifi:latest
+```
+
+The optional third step allows the docker host to connect to an ip address on the `macvlan`. For example, docker is running on the system adminstrator's workstation, and this workaround allows the administrator access to the controller's web interface. The following `ip` commands are run on the host as root or sudo. The specific configuration to make this `shim` persistent across reboots will depend on which version of linux the host is using and out of scope. Modern versions of linux may use `nmcli` to configure the host network instead of `ip` but `ip` is widely available still and the primary network configuration tool on many systems still.
+```bash
+ip link add shim link eth0 type macvlan mode bridge
+ip addr add 192.168.110.193/32 dev shim
+ip link set shim up
+ip route add 192.168.110.192/26 dev shim
+```
+
+
+There are several good online write-ups on docker and macvlans. Use your favorite search engine to find current information. As of January 2020, useful information sources include a write-up for docker at [collabnix.com/docker-17-06-swarm-mode-now-with-macvlan-support](http://collabnix.com/docker-17-06-swarm-mode-now-with-macvlan-support/); the docker online documentation for macvlans at [https://docs.docker.com/network/macvlan/](https://docs.docker.com/network/macvlan/); and a useful write-up on the workaround used above that enables access from the docker host to the macvlan containers at [https://blog.oddbit.com/post/2018-03-12-using-docker-macvlan-networks/](https://blog.oddbit.com/post/2018-03-12-using-docker-macvlan-networks/).
 
 ## Beta Users
 
